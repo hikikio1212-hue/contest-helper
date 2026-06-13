@@ -140,7 +140,8 @@ export default async function handler(req, res) {
           $n('a[href*="egoread"], a[href*="seq="]').each((_, el) => {
             const title = $n(el).text().trim();
             const href  = $n(el).attr('href');
-            if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title)) {
+            const isNotice = /^\s*[\[「『]|소개|장점|찾는\s*방법|유용한\s*툴|첨부파일|이용\s*방법|공지|안내|^\s*AD\.|이벤트/.test(title);
+            if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title) && !isNotice) {
               seenNaming.add(title);
               const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
               contests.push({
