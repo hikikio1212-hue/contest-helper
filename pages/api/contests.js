@@ -137,11 +137,11 @@ export default async function handler(req, res) {
           const $n = cheerio.load(namingData);
           const existingTitles = new Set(contests.map(c => c.title));
           const seenNaming = new Set();
-          $n('a[href*="str_no="], a[href*="egoread"], a[href*="seq="]').each((_, el) => {
-            const title = $n(el).text().trim();
-            const href  = $n(el).attr('href');
-            const isNotice = /^\s*[\[「『]|소개|장점|찾는\s*방법|유용한\s*툴|첨부파일|이용\s*방법|공지|안내|^\s*AD\.|이벤트/.test(title);
-            if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title) && !isNotice) {
+          $n('a[href*="Txt_bcode=030210001"][href*="str_no="]').each((_, el) => {
+            let title = $n(el).text().replace(/\s+/g, ' ').trim();
+            title = title.replace(/^네이밍\s*[•·]\s*슬로건\s*/, '').trim();
+            const href = $n(el).attr('href');
+            if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title)) {
               seenNaming.add(title);
               const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
               contests.push({
