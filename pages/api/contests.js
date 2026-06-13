@@ -96,6 +96,7 @@ export default async function handler(req, res) {
       } else if (site.id === 'contest') {
 
         // 1순위: RSS 피드 (정적, JS 렌더링 불필요)
+        let rssOk = false;
         try {
           const { data: rssData } = await axios.get(
             'https://www.contestkorea.com/rss/rssView.php?int_gbn=1',
@@ -124,10 +125,37 @@ export default async function handler(req, res) {
               });
             }
           });
+          rssOk = contests.length > 0;
         } catch (_) { /* RSS 실패 시 폴백으로 */ }
 
-        // 2순위 폴백: 목록 페이지 링크
-        if (!contests.length) {
+        // 추가: 네이밍•슬로건 카테고리 전용 목록 (제목에 키워드 없어도 강제로 '슬로건' 분류)
+        try {
+          const { data: namingData } = await axios.get(
+            'https://www.contestkorea.com/sub/list.php?int_gbn=1&Txt_bcode=030210001',
+            { headers, timeout: 12000 }
+          );
+          const $n = cheerio.load(namingData);
+          const existingTitles = new Set(contests.map(c => c.title));
+          const seenNaming = new Set();
+          $n('a[href*="egoread"], a[href*="seq="]').each((_, el) => {
+            const title = $n(el).text().trim();
+            const href  = $n(el).attr('href');
+            if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title)) {
+              seenNaming.add(title);
+              const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
+              contests.push({
+                title, host: '', deadline: '', prize: '',
+                source: '콘테스트코리아', detailUrl,
+                region:    guessRegion(title),
+                category:  '슬로건',
+                ageTarget: guessAge(title),
+              });
+            }
+          });
+        } catch (_) { /* 무시 */ }
+
+        // 2순위 폴백: 목록 페이지 링크 (RSS 실패 시에만)
+        if (!rssOk) {
           const { data } = await axios.get(
             'https://www.contestkorea.com/sub/list.php?int_gbn=1',
             { headers, timeout: 12000 }
@@ -145,6 +173,7 @@ export default async function handler(req, res) {
             }
           });
         }
+        contests = contests.slice(0, 30);
 
       // ── 씽굿 ────────────────────────────────────────────────────
       } else if (site.id === 'thinkgood') {
