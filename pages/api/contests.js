@@ -2,13 +2,15 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 
 // ── 제목에서 카테고리 추정 ──────────────────────────────────────────
-function guessCategory(title) {
-  if (/슬로건|표어|캐치프레이즈|네이밍/.test(title)) return '슬로건';
-  if (/사진|포토/.test(title))                        return '사진';
-  if (/수기|수필|에세이/.test(title))                 return '수기';
-  if (/아이디어|기획/.test(title))                    return '아이디어';
-  if (/디자인|포스터|웹툰/.test(title))               return '디자인';
-  if (/영상|동영상|UCC|유튜브|쇼츠/.test(title))     return '영상';
+function guessCategory(title, extra = '') {
+  const bracketLabels = [...title.matchAll(/\[([^\]]+)\]/g)].map(m => m[1]).join(' ');
+  const text = `${title} ${extra} ${bracketLabels}`;
+  if (/슬로건|표어|캐치프레이즈|네이밍|명칭/.test(text)) return '슬로건';
+  if (/사진|포토/.test(text))                        return '사진';
+  if (/수기|수필|에세이/.test(text))                 return '수기';
+  if (/아이디어|기획/.test(text))                    return '아이디어';
+  if (/디자인|포스터|웹툰/.test(text))               return '디자인';
+  if (/영상|동영상|UCC|유튜브|쇼츠/.test(text))     return '영상';
   return '기타';
 }
 
@@ -106,6 +108,8 @@ export default async function handler(req, res) {
             const desc  = $r(el).find('description').text().trim();
             const hostMatch = desc.match(/주최[^：:]*[：:]\s*([^|<\n]+)/);
             const dateMatch = desc.match(/마감[^：:]*[：:]\s*([^|<\n]+)/);
+            const catMatch  = title.match(/^\s*\[([^\]]+)\]/) || desc.match(/\[([^\]]+)\]/);
+            const catHint   = catMatch ? catMatch[1] : '';
             if (title && title.length > 4) {
               contests.push({
                 title,
@@ -115,7 +119,7 @@ export default async function handler(req, res) {
                 source:    '콘테스트코리아',
                 detailUrl: link || '',
                 region:    guessRegion(title),
-                category:  guessCategory(title),
+                category:  guessCategory(title, catHint),
                 ageTarget: guessAge(title),
               });
             }
