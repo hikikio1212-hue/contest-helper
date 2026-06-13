@@ -1,14 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 
 const DEFAULT_SITES = [
-  { id: 'wevity',    name: '위비티',         url: 'https://www.wevity.com',        active: true },
-  { id: 'contest',   name: '콘테스트코리아',  url: 'https://www.contestkorea.com', active: true },
-  { id: 'thinkgood', name: '씽굿',            url: 'https://www.thinkcontest.com', active: true },
+  { id: 'wevity',    name: '위비티',        url: 'https://www.wevity.com',        active: true },
+  { id: 'contest',   name: '콘테스트코리아', url: 'https://www.contestkorea.com', active: true },
+  { id: 'thinkgood', name: '씽굿',           url: 'https://www.thinkcontest.com', active: true },
 ];
 
 const EMPTY_PROFILE = { label: '', name: '', age: '', region: '', job: '', interest: '' };
 const CATEGORIES    = ['전체', '슬로건', '사진', '수기', '아이디어', '디자인', '영상', '기타'];
-const TONES         = ['자연스럽게', '감성적으로', '유머있게', '공식적으로', '간결하게'];
+const AGE_TARGETS   = ['전체', '누구나', '초등학생', '중학생', '성인'];
 
 function parseDeadlineScore(deadline) {
   if (!deadline) return 9999;
@@ -60,6 +60,12 @@ const S = {
   pill:   (bg, fg) => ({ display: 'inline-block', padding: '2px 9px', borderRadius: '99px', fontSize: '12px', background: bg, color: fg, fontWeight: '600', marginRight: '4px' }),
   row:    { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
   stat:   { background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '14px 18px', textAlign: 'center', flex: '1' },
+  filterBtn: (active) => ({
+    padding: '5px 12px', borderRadius: '20px', border: active ? 'none' : '1px solid #d1d5db',
+    cursor: 'pointer', fontSize: '13px', fontWeight: active ? '700' : '400',
+    background: active ? '#1d4ed8' : '#fff', color: active ? '#fff' : '#6b7280',
+    transition: 'all .15s',
+  }),
 };
 
 export default function Home() {
@@ -73,8 +79,9 @@ export default function Home() {
   const [genLoading, setGenLoading]         = useState({});
   const [copied, setCopied]                 = useState({});
   const [sort, setSort]                     = useState('deadline');
-  const [regionFilter, setRegionFilter]     = useState('');
+  const [regionFilter, setRegionFilter]     = useState('전체');  // '전체' | '전국' | '대구'
   const [catFilter, setCatFilter]           = useState('전체');
+  const [ageFilter, setAgeFilter]           = useState('전체');
   const [keyword, setKeyword]               = useState('');
   const [history, setHistory]               = useState([]);
   const [bookmarks, setBookmarks]           = useState([]);
@@ -90,7 +97,6 @@ export default function Home() {
   const [newSiteName, setNewSiteName]       = useState('');
   const [newSiteUrl, setNewSiteUrl]         = useState('');
   const [genCount, setGenCount]             = useState(5);
-  const [genTone, setGenTone]               = useState('자연스럽게');
   const [statsView, setStatsView]           = useState(false);
 
   useEffect(() => {
@@ -111,12 +117,14 @@ export default function Home() {
   useEffect(() => { try { localStorage.setItem('v5_sites',     JSON.stringify(sites));     } catch {} }, [sites]);
   useEffect(() => { try { localStorage.setItem('v5_bookmarks', JSON.stringify(bookmarks)); } catch {} }, [bookmarks]);
 
+  // ── 복사 + 피드백 ────────────────────────────────────────────────────
   const copyWithFeedback = (text, key) => {
     navigator.clipboard.writeText(text);
     setCopied(p => ({ ...p, [key]: true }));
     setTimeout(() => setCopied(p => ({ ...p, [key]: false })), 2000);
   };
 
+  // ── 공모전 검색 ──────────────────────────────────────────────────────
   const fetchContests = async () => {
     setLoading(true); setContests([]); setSiteStatus([]); setDetail({}); setResults({});
     try {
@@ -133,6 +141,7 @@ export default function Home() {
     setLoading(false);
   };
 
+  // ── 상세 스크래핑 ────────────────────────────────────────────────────
   const fetchDetail = async (contest, idx) => {
     if (!contest.detailUrl) return alert('상세 페이지 URL을 찾을 수 없어요.');
     setDetailLoading(p => ({ ...p, [idx]: true }));
@@ -149,13 +158,14 @@ export default function Home() {
     setDetailLoading(p => ({ ...p, [idx]: false }));
   };
 
+  // ── 프롬프트 생성 ─────────────────────────────────────────────────────
   const generate = async (contest, idx) => {
     setGenLoading(p => ({ ...p, [idx]: true }));
     try {
       const res  = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contest, profile: profiles[activeProfile], detailInfo: detail[idx] || null, count: genCount, tone: genTone }),
+        body: JSON.stringify({ contest, profile: profiles[activeProfile], detailInfo: detail[idx] || null, count: genCount }),
       });
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || '생성 오류'); }
       const data = await res.json();
@@ -164,6 +174,7 @@ export default function Home() {
     setGenLoading(p => ({ ...p, [idx]: false }));
   };
 
+  // ── 히스토리 저장 ────────────────────────────────────────────────────
   const saveToHistory = (contest, idx) => {
     const r = results[idx];
     if (!r?.response?.trim()) return alert('STEP 2에 Claude 응답을 먼저 붙여넣어주세요.');
@@ -185,6 +196,7 @@ export default function Home() {
     alert('✅ 히스토리에 저장됐어요!');
   };
 
+  // ── 히스토리에서 프롬프트 재생성 ─────────────────────────────────────
   const regenerate = async (hItem) => {
     const fake    = { title: hItem.contestTitle, host: hItem.host, deadline: hItem.deadline, source: hItem.sourceName, detailUrl: hItem.siteUrl, category: hItem.category };
     const profile = profiles.find(p => (p.name || p.label) === hItem.profile) || profiles[activeProfile];
@@ -193,7 +205,7 @@ export default function Home() {
       const res  = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contest: fake, profile, detailInfo: null, count: genCount, tone: genTone }),
+        body: JSON.stringify({ contest: fake, profile, detailInfo: null, count: genCount }),
       });
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || '재생성 오류'); }
       const data = await res.json();
@@ -203,6 +215,7 @@ export default function Home() {
     setGenLoading(p => ({ ...p, ['h_' + hItem.id]: false }));
   };
 
+  // ── 즐겨찾기 ─────────────────────────────────────────────────────────
   const toggleBookmark = (contest) => {
     setBookmarks(b => {
       const exists = b.find(x => x.title === contest.title);
@@ -226,13 +239,20 @@ export default function Home() {
   const updateProfile = (idx, field, value) =>
     setProfiles(p => p.map((pr, i) => i === idx ? { ...pr, [field]: value } : pr));
 
+  // ── 정렬·필터 ─────────────────────────────────────────────────────────
   const sorted = useMemo(() => {
     return [...contests]
       .filter(c => {
         const text = (c.title + (c.host || '') + (c.region || '')).toLowerCase();
-        if (keyword      && !text.includes(keyword.toLowerCase())) return false;
-        if (regionFilter && !text.includes(regionFilter))          return false;
-        if (catFilter !== '전체' && c.category !== catFilter)      return false;
+        // 키워드 검색
+        if (keyword && !text.includes(keyword.toLowerCase())) return false;
+        // 카테고리 필터
+        if (catFilter !== '전체' && (c.category || '기타') !== catFilter) return false;
+        // 지역 필터
+        if (regionFilter === '대구' && c.region !== '대구') return false;
+        if (regionFilter === '전국' && c.region === '대구') return false;
+        // 나이 필터
+        if (ageFilter !== '전체' && (c.ageTarget || '누구나') !== ageFilter) return false;
         return true;
       })
       .sort((a, b) => {
@@ -244,8 +264,9 @@ export default function Home() {
         }
         return 0;
       });
-  }, [contests, keyword, regionFilter, catFilter, sort]);
+  }, [contests, keyword, regionFilter, catFilter, ageFilter, sort]);
 
+  // ── 통계 ──────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
     const total   = history.length;
     const won     = history.filter(h => h.status === '당첨').length;
@@ -257,9 +278,11 @@ export default function Home() {
 
   const appliedTitles = useMemo(() => new Set(history.map(h => h.contestTitle)), [history]);
 
+  // ── 렌더 ──────────────────────────────────────────────────────────────
   return (
     <div style={S.wrap}>
 
+      {/* 헤더 */}
       <div style={S.hdr}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
@@ -278,6 +301,7 @@ export default function Home() {
         </div>
       </div>
 
+      {/* 탭 */}
       <div style={S.tabs}>
         {[['search','🔍 공모전'],['bookmarks','⭐ 즐겨찾기'],['history','📋 히스토리'],['profile','👤 프로필'],['sites','🌐 사이트']].map(([k, l]) => (
           <button key={k} style={S.tab(tab === k)} onClick={() => setTab(k)}>
@@ -289,10 +313,13 @@ export default function Home() {
         ))}
       </div>
 
+      {/* ─────────── 검색 탭 ─────────── */}
       {tab === 'search' && (
         <div>
           <div style={{ ...S.card, padding: '14px 16px' }}>
-            <div style={{ ...S.row, marginBottom: '10px' }}>
+
+            {/* 검색 버튼 + 정렬 + 프로필 */}
+            <div style={{ ...S.row, marginBottom: '12px' }}>
               <button onClick={fetchContests} disabled={loading} style={S.btn(loading ? '#9ca3af' : '#1d4ed8')}>
                 {loading ? '⏳ 검색 중...' : '🔍 공모전 자동 검색'}
               </button>
@@ -309,17 +336,43 @@ export default function Home() {
                 </select>
               </div>
             </div>
-            <div style={S.row}>
-              <input placeholder="🔎 키워드 검색" value={keyword} onChange={e => setKeyword(e.target.value)}
-                style={{ ...S.input, marginBottom: 0, flex: '1', minWidth: '100px' }} />
-              <input placeholder="지역 (예: 대구)" value={regionFilter} onChange={e => setRegionFilter(e.target.value)}
-                style={{ ...S.input, marginBottom: 0, width: '110px' }} />
-              <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
-                style={{ border: '1px solid #d1d5db', borderRadius: '8px', padding: '8px 10px', fontSize: '14px', background: '#fff' }}>
-                {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-              </select>
+
+            {/* 키워드 검색 */}
+            <input placeholder="🔎 키워드 검색 (공모전명·주최·지역)" value={keyword} onChange={e => setKeyword(e.target.value)}
+              style={{ ...S.input, marginBottom: '10px' }} />
+
+            {/* 지역 필터 */}
+            <div style={{ marginBottom: '8px' }}>
+              <span style={{ fontSize: '12px', color: '#6b7280', marginRight: '8px', fontWeight: '600' }}>📍 지역</span>
+              {['전체', '전국', '대구'].map(r => (
+                <button key={r} onClick={() => setRegionFilter(r)} style={{ ...S.filterBtn(regionFilter === r), marginRight: '6px' }}>
+                  {r}
+                </button>
+              ))}
             </div>
-            <div style={{ marginTop: '10px', padding: '10px 12px', background: '#f0f9ff', borderRadius: '9px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+
+            {/* 카테고리 필터 */}
+            <div style={{ marginBottom: '8px' }}>
+              <span style={{ fontSize: '12px', color: '#6b7280', marginRight: '8px', fontWeight: '600' }}>📂 유형</span>
+              {CATEGORIES.map(c => (
+                <button key={c} onClick={() => setCatFilter(c)} style={{ ...S.filterBtn(catFilter === c), marginRight: '6px', marginBottom: '4px' }}>
+                  {c}
+                </button>
+              ))}
+            </div>
+
+            {/* 나이 필터 */}
+            <div style={{ marginBottom: '10px' }}>
+              <span style={{ fontSize: '12px', color: '#6b7280', marginRight: '8px', fontWeight: '600' }}>👤 대상</span>
+              {AGE_TARGETS.map(a => (
+                <button key={a} onClick={() => setAgeFilter(a)} style={{ ...S.filterBtn(ageFilter === a), marginRight: '6px' }}>
+                  {a}
+                </button>
+              ))}
+            </div>
+
+            {/* 생성 옵션 */}
+            <div style={{ padding: '10px 12px', background: '#f0f9ff', borderRadius: '9px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: '13px', color: '#1d4ed8', fontWeight: '600' }}>✍️ 생성 옵션</span>
               <label style={{ fontSize: '13px', color: '#374151', display: 'flex', gap: '6px', alignItems: 'center' }}>
                 응모글 수:
@@ -328,16 +381,11 @@ export default function Home() {
                   {[3, 5, 7].map(n => <option key={n} value={n}>{n}개</option>)}
                 </select>
               </label>
-              <label style={{ fontSize: '13px', color: '#374151', display: 'flex', gap: '6px', alignItems: 'center' }}>
-                문체:
-                <select value={genTone} onChange={e => setGenTone(e.target.value)}
-                  style={{ border: '1px solid #d1d5db', borderRadius: '7px', padding: '3px 7px', fontSize: '13px', background: '#fff' }}>
-                  {TONES.map(t => <option key={t}>{t}</option>)}
-                </select>
-              </label>
+              <span style={{ fontSize: '13px', color: '#6b7280' }}>✨ 문체는 공모전 내용에 맞게 자동 결정돼요</span>
             </div>
           </div>
 
+          {/* 사이트 상태 */}
           {siteStatus.length > 0 && (
             <div style={{ ...S.card, padding: '10px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
               {siteStatus.map((s, i) => (
@@ -359,22 +407,34 @@ export default function Home() {
             <div style={{ textAlign: 'center', color: '#9ca3af', padding: '32px 0' }}>현재 필터 조건에 맞는 공모전이 없어요.</div>
           )}
 
+          {/* 공모전 목록 */}
           {sorted.map((c, i) => (
             <div key={i} style={{ ...S.card, borderLeft: appliedTitles.has(c.title) ? '4px solid #059669' : '1.5px solid #e5e7eb' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: '700', fontSize: '15px', color: '#111827', marginBottom: '7px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <span>{c.title}</span>
+                  {/* 제목 클릭 → 사이트 이동 */}
+                  <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '7px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    {c.detailUrl ? (
+                      <a href={c.detailUrl} target="_blank" rel="noreferrer"
+                        style={{ color: '#111827', textDecoration: 'none', cursor: 'pointer' }}
+                        onMouseEnter={e => e.target.style.color = '#1d4ed8'}
+                        onMouseLeave={e => e.target.style.color = '#111827'}>
+                        {c.title} 🔗
+                      </a>
+                    ) : (
+                      <span style={{ color: '#111827' }}>{c.title}</span>
+                    )}
                     {appliedTitles.has(c.title) && <span style={S.pill('#d1fae5', '#059669')}>응모완료</span>}
                     {isBookmarked(c.title)       && <span style={S.pill('#fef3c7', '#d97706')}>⭐ 저장됨</span>}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
-                    {c.host     && <span style={S.badge('#6b7280')}>{c.host}</span>}
-                    {c.deadline && <span style={S.badge('#059669')}>{c.deadline}</span>}
-                    {c.prize    && <span style={S.badge('#d97706')}>{c.prize}</span>}
-                    {c.region   && <span style={S.badge('#1d4ed8')}>{c.region}</span>}
-                    {c.category && c.category !== '기타' && <span style={S.badge(catColor[c.category] || '#6b7280')}>{c.category}</span>}
-                    {c.source   && <span style={{ fontSize: '12px', color: '#9ca3af' }}>출처: {c.source}</span>}
+                    {c.host      && <span style={S.badge('#6b7280')}>{c.host}</span>}
+                    {c.deadline  && <span style={S.badge('#059669')}>{c.deadline}</span>}
+                    {c.prize     && <span style={S.badge('#d97706')}>{c.prize}</span>}
+                    {c.region    && <span style={S.badge('#1d4ed8')}>{c.region}</span>}
+                    {c.ageTarget && c.ageTarget !== '누구나' && <span style={S.badge('#7c3aed')}>{c.ageTarget}</span>}
+                    {c.category  && c.category !== '기타' && <span style={S.badge(catColor[c.category] || '#6b7280')}>{c.category}</span>}
+                    {c.source    && <span style={{ fontSize: '12px', color: '#9ca3af' }}>출처: {c.source}</span>}
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '116px' }}>
@@ -394,9 +454,10 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* 상세 분석 결과 */}
               {detail[i] && (
                 <div style={{ marginTop: '12px', background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: '10px', padding: '12px 14px' }}>
-                  <div style={{ fontWeight: '700', color: '#7c3aed', marginBottom: '8px', fontSize: '13px' }}>🔬 상세 분석 결과 <span style={{ fontWeight: '400', color: '#9ca3af' }}>(원문도 프롬프트에 자동 포함돼요)</span></div>
+                  <div style={{ fontWeight: '700', color: '#7c3aed', marginBottom: '8px', fontSize: '13px' }}>🔬 상세 분석 결과 <span style={{ fontWeight: '400', color: '#9ca3af' }}>(원문 포함, 평가기준 자동 반영)</span></div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '13px' }}>
                     {detail[i].charLimit    && <div><span style={{ color: '#6b7280' }}>글자 수: </span><strong>{detail[i].charLimit}</strong></div>}
                     {detail[i].resultDate   && <div><span style={{ color: '#6b7280' }}>결과 발표: </span><strong style={{ color: '#d97706' }}>{detail[i].resultDate}</strong></div>}
@@ -408,8 +469,11 @@ export default function Home() {
                 </div>
               )}
 
+              {/* STEP 1 + STEP 2 */}
               {results[i] && (
                 <div style={{ marginTop: '12px' }}>
+
+                  {/* STEP 1: 프롬프트 복사 */}
                   <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: '10px', padding: '14px', marginBottom: '10px' }}>
                     <div style={{ fontWeight: '700', color: '#7c3aed', marginBottom: '8px', fontSize: '13px' }}>
                       📋 STEP 1 — 아래 프롬프트를 복사해서 Claude.ai에 붙여넣으세요
@@ -428,6 +492,8 @@ export default function Home() {
                       </a>
                     </div>
                   </div>
+
+                  {/* STEP 2: Claude 응답 붙여넣기 */}
                   <div style={{ background: '#f0f9ff', border: '1px solid #bfdbfe', borderRadius: '10px', padding: '14px' }}>
                     <div style={{ fontWeight: '700', color: '#1d4ed8', marginBottom: '8px', fontSize: '13px' }}>
                       ✍️ STEP 2 — Claude에서 받은 응모글을 여기에 붙여넣기
@@ -456,6 +522,7 @@ export default function Home() {
                       </div>
                     )}
                   </div>
+
                 </div>
               )}
             </div>
@@ -463,6 +530,7 @@ export default function Home() {
         </div>
       )}
 
+      {/* ─────────── 즐겨찾기 탭 ─────────── */}
       {tab === 'bookmarks' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -481,7 +549,13 @@ export default function Home() {
             <div key={i} style={S.card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '6px' }}>{c.title}</div>
+                  <div style={{ fontWeight: '700', fontSize: '15px', marginBottom: '6px' }}>
+                    {c.detailUrl ? (
+                      <a href={c.detailUrl} target="_blank" rel="noreferrer" style={{ color: '#111827', textDecoration: 'none' }}>
+                        {c.title} 🔗
+                      </a>
+                    ) : c.title}
+                  </div>
                   <div>
                     {c.host     && <span style={S.badge('#6b7280')}>{c.host}</span>}
                     {c.deadline && <span style={S.badge('#059669')}>{c.deadline}</span>}
@@ -491,10 +565,6 @@ export default function Home() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <button onClick={() => toggleBookmark(c)} style={S.btnOut('#ef4444', true)}>삭제</button>
-                  {c.detailUrl && (
-                    <a href={c.detailUrl} target="_blank" rel="noreferrer"
-                      style={{ ...S.btn('#1d4ed8', true), textDecoration: 'none', textAlign: 'center' }}>🔗 이동</a>
-                  )}
                 </div>
               </div>
             </div>
@@ -502,6 +572,7 @@ export default function Home() {
         </div>
       )}
 
+      {/* ─────────── 히스토리 탭 ─────────── */}
       {tab === 'history' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -514,6 +585,7 @@ export default function Home() {
             )}
           </div>
 
+          {/* 통계 뷰 */}
           {statsView && (
             <div>
               <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
@@ -550,6 +622,7 @@ export default function Home() {
             </div>
           )}
 
+          {/* 목록 뷰 */}
           {!statsView && (
             <div>
               {history.length === 0 && (
@@ -576,6 +649,7 @@ export default function Home() {
                       {h.category   && <span style={S.badge(catColor[h.category] || '#6b7280')}>{h.category}</span>}
                       <span style={{ color: '#9ca3af', fontSize: '12px' }}>응모일: {h.date}</span>
                     </div>
+
                     {h.resultDate && (
                       <div style={{ background: daysLeft !== null && daysLeft <= 3 ? '#fff7ed' : '#f0fdf4', border: `1px solid ${daysLeft !== null && daysLeft <= 3 ? '#fed7aa' : '#bbf7d0'}`, borderRadius: '8px', padding: '8px 12px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: '13px' }}>📅 결과 발표: <strong>{h.resultDate}</strong></span>
@@ -586,23 +660,26 @@ export default function Home() {
                         )}
                       </div>
                     )}
+
                     {h.siteUrl && (
                       <div style={{ marginBottom: '8px', fontSize: '13px' }}>
                         <a href={h.siteUrl} target="_blank" rel="noreferrer" style={{ color: '#1d4ed8', textDecoration: 'none' }}>🔗 {h.siteUrl}</a>
                       </div>
                     )}
+
                     {h.result && (
                       <details>
                         <summary style={{ cursor: 'pointer', fontSize: '14px', color: '#059669', fontWeight: '600', userSelect: 'none', marginBottom: '2px' }}>응모글 보기 ▾</summary>
                         <pre style={{ whiteSpace: 'pre-wrap', fontSize: '13px', color: '#374151', marginTop: '8px', lineHeight: '1.75', background: '#f0fdf4', borderRadius: '8px', padding: '10px', maxHeight: '220px', overflow: 'auto' }}>{h.result}</pre>
                         <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
                           <button onClick={() => copyWithFeedback(h.result, 'hr_' + h.id)}
-                            style={S.btn(copied['hr_' + h.id] ? '#059689' : '#1d4ed8', true)}>
+                            style={S.btn(copied['hr_' + h.id] ? '#059669' : '#1d4ed8', true)}>
                             {copied['hr_' + h.id] ? '✅ 복사됨!' : '📋 응모글 복사'}
                           </button>
                         </div>
                       </details>
                     )}
+
                     <details style={{ marginTop: h.result ? '8px' : '0' }}>
                       <summary style={{ cursor: 'pointer', fontSize: '13px', color: '#7c3aed', userSelect: 'none' }}>프롬프트 보기 ▾</summary>
                       <pre style={{ whiteSpace: 'pre-wrap', fontSize: '12px', color: '#374151', marginTop: '6px', lineHeight: '1.7', background: '#faf5ff', borderRadius: '8px', padding: '10px', maxHeight: '160px', overflow: 'auto' }}>{h.prompt}</pre>
@@ -629,6 +706,7 @@ export default function Home() {
         </div>
       )}
 
+      {/* ─────────── 프로필 탭 ─────────── */}
       {tab === 'profile' && (
         <div>
           <div style={{ marginBottom: '12px', fontSize: '14px', color: '#6b7280' }}>
@@ -671,6 +749,7 @@ export default function Home() {
         </div>
       )}
 
+      {/* ─────────── 사이트 관리 탭 ─────────── */}
       {tab === 'sites' && (
         <div>
           <div style={{ marginBottom: '12px', fontSize: '14px', color: '#6b7280' }}>
