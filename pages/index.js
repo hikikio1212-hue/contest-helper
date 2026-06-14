@@ -10,32 +10,46 @@ const EMPTY_PROFILE = { label: '', name: '', age: '', region: '', job: '', inter
 const CATEGORIES    = ['전체', '슬로건', '사진', '수기', '아이디어', '디자인', '영상', '기타'];
 const AGE_TARGETS   = ['전체', '누구나', '초등학생', '중학생', '성인'];
 
-function parseDeadlineScore(deadline) {
-  if (!deadline) return 9999;
+// ── 마감까지 남은 일수 계산 (없으면 null=진행중, 마감된 건 음수) ───────
+function getDaysLeft(deadline, refDate) {
+  if (!deadline) return null;
+  const today = refDate ? new Date(refDate) : new Date();
+  today.setHours(0, 0, 0, 0);
+
   const dMatch = deadline.match(/D-(\d+)/i);
-  if (dMatch) return parseInt(dMatch[1]);
-  if (deadline.includes('마감임박') || deadline.includes('D-0')) return 0;
+  if (dMatch) return parseInt(dMatch[1], 10);
+  if (/D-0\b|D-DAY|D0\b/i.test(deadline)) return 0;
+  if (/접수예정/.test(deadline)) return null;        // 아직 시작 전 → 진행중으로 취급
+  if (/^\s*마감\s*$/.test(deadline) || /마감(?!임박|예정)/.test(deadline)) return -1; // 이미 마감
+
   const full = deadline.match(/(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
   if (full) {
-    const d = new Date(parseInt(full[1]), parseInt(full[2]) - 1, parseInt(full[3]));
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const d = new Date(parseInt(full[1], 10), parseInt(full[2], 10) - 1, parseInt(full[3], 10));
     return Math.ceil((d - today) / 86400000);
   }
   const short = deadline.match(/(\d{1,2})[.\/-](\d{1,2})/);
   if (short) {
-    const now = new Date();
-    let d = new Date(now.getFullYear(), parseInt(short[1]) - 1, parseInt(short[2]));
-    if (d < now) d.setFullYear(d.getFullYear() + 1);
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    let d = new Date(today.getFullYear(), parseInt(short[1], 10) - 1, parseInt(short[2], 10));
+    if (d < today) d.setFullYear(d.getFullYear() + 1);
     return Math.ceil((d - today) / 86400000);
   }
-  return 9999;
+  return null; // 형식 불명 → 진행중으로 취급
+}
+
+// ── 다양한 날짜 표기(YYYY.MM.DD, YY-MM-DD 등)를 Date로 변환 ────────────
+function parseFlexDate(str) {
+  if (!str) return null;
+  const m = str.match(/(\d{2,4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+  if (!m) return null;
+  let y = parseInt(m[1], 10);
+  if (y < 100) y += 2000;
+  const d = new Date(y, parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+  return isNaN(d.getTime()) ? null : d;
 }
 
 function daysUntil(dateStr) {
-  if (!dateStr) return null;
-  const target = new Date(dateStr.replace(/\./g, '-'));
-  if (isNaN(target)) return null;
+  const target = parseFlexDate(dateStr);
+  if (!target) return null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   return Math.ceil((target - today) / 86400000);
 }
@@ -78,7 +92,8 @@ export default function Home() {
   const [results, setResults]               = useState({});
   const [genLoading, setGenLoading]         = useState({});
   const [copied, setCopied]                 = useState({});
-  const [sort, setSort]                     = useState('deadline');
+  const [viewMode, setViewMode]             = useState('urgent'); // 'urgent' | 'ongoing' | 'prize'
+  const [searchTime, setSearchTime]         = useState(null);
   const [regionFilter, setRegionFilter]     = useState('전체');  // '전체' | '전국' | '대구'
   const [catFilter, setCatFilter]           = useState('전체');
   const [ageFilter, setAgeFilter]           = useState('전체');
@@ -127,6 +142,7 @@ export default function Home() {
   // ── 공모전 검색 ──────────────────────────────────────────────────────
   const fetchContests = async () => {
     setLoading(true); setContests([]); setSiteStatus([]); setDetail({}); setResults({});
+    setSearchTime(new Date());
     try {
       const activeSites = sites.filter(s => s.active).map(s => ({ id: s.id, name: s.name, url: s.url }));
       const res  = await fetch('/api/contests', {
@@ -240,9 +256,25 @@ export default function Home() {
     setProfiles(p => p.map((pr, i) => i === idx ? { ...pr, [field]: value } : pr));
 
   // ── 정렬·필터 ─────────────────────────────────────────────────────────
+  const appliedTitles = useMemo(() => new Set(history.map(h => h.contestTitle)), [history]);
+
   const sorted = useMemo(() => {
-    return [...contests]
+    const refTime = searchTime || new Date();
+
+    // 제목 기준 중복 제거 (먼저 나온 것만 유지)
+    const seenTitles = new Set();
+    const deduped = contests.filter(c => {
+      const key = (c.title || '').trim();
+      if (!key || seenTitles.has(key)) return false;
+      seenTitles.add(key);
+      return true;
+    });
+
+    return deduped
       .filter(c => {
+        // 이미 응모한 공모전은 검색 결과에서 제외
+        if (appliedTitles.has(c.title)) return false;
+
         const text = (c.title + (c.host || '') + (c.region || '')).toLowerCase();
         // 키워드 검색
         if (keyword && !text.includes(keyword.toLowerCase())) return false;
@@ -253,18 +285,42 @@ export default function Home() {
         if (regionFilter === '전국' && c.region === '대구') return false;
         // 나이 필터
         if (ageFilter !== '전체' && (c.ageTarget || '누구나') !== ageFilter) return false;
-        return true;
+
+        // 검색 시점 기준 남은 일수
+        const daysLeft = getDaysLeft(c.deadline, refTime);
+
+        // 이미 마감된 공모전은 항상 제외
+        if (daysLeft !== null && daysLeft < 0) return false;
+
+        if (viewMode === 'urgent')  return daysLeft !== null && daysLeft <= 7;   // 마감임박순: 7일 이내
+        if (viewMode === 'ongoing') return daysLeft === null || daysLeft > 7;    // 진행중: 나머지
+        return true; // 상금높은순: 마감 제외 전체
       })
       .sort((a, b) => {
-        if (sort === 'deadline') return parseDeadlineScore(a.deadline) - parseDeadlineScore(b.deadline);
-        if (sort === 'prize') {
-          const pa = parseInt(a.prize?.replace(/[^0-9]/g, '') || '0');
-          const pb = parseInt(b.prize?.replace(/[^0-9]/g, '') || '0');
-          return pb - pa;
+        if (viewMode === 'prize') {
+          const pa = parseInt(a.prize?.replace(/[^0-9]/g, '') || '0', 10);
+          const pb = parseInt(b.prize?.replace(/[^0-9]/g, '') || '0', 10);
+          if (pb !== pa) return pb - pa;
         }
-        return 0;
+        const da = getDaysLeft(a.deadline, refTime);
+        const db = getDaysLeft(b.deadline, refTime);
+        const sa = da === null ? 9999 : da;
+        const sb = db === null ? 9999 : db;
+        return sa - sb;
       });
-  }, [contests, keyword, regionFilter, catFilter, ageFilter, sort]);
+  }, [contests, keyword, regionFilter, catFilter, ageFilter, viewMode, searchTime, appliedTitles]);
+
+  // ── 히스토리: 결과발표일 최신순 정렬 ──────────────────────────────────
+  const sortedHistory = useMemo(() => {
+    return [...history].sort((a, b) => {
+      const da = parseFlexDate(a.resultDate);
+      const db = parseFlexDate(b.resultDate);
+      if (da && db) return db - da;       // 결과발표일이 최신(늦은 날짜)인 것부터
+      if (da) return -1;
+      if (db) return 1;
+      return b.id - a.id;                 // 결과발표일 없으면 최근 응모순
+    });
+  }, [history]);
 
   // ── 통계 ──────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -275,8 +331,6 @@ export default function Home() {
     const winRate = total > 0 ? Math.round((won / total) * 100) : 0;
     return { total, won, lost, pending, winRate };
   }, [history]);
-
-  const appliedTitles = useMemo(() => new Set(history.map(h => h.contestTitle)), [history]);
 
   // ── 렌더 ──────────────────────────────────────────────────────────────
   return (
@@ -290,7 +344,7 @@ export default function Home() {
             <div style={{ fontSize: '13px', opacity: .85 }}>프롬프트 생성 → Claude.ai 붙여넣기 → 응답 저장 → 히스토리 관리</div>
           </div>
           <div style={{ background: 'rgba(255,255,255,0.18)', borderRadius: '10px', padding: '6px 12px', textAlign: 'center', fontSize: '12px', fontWeight: '700' }}>
-            <div style={{ fontSize: '18px', fontWeight: '800' }}>v5</div>
+            <div style={{ fontSize: '18px', fontWeight: '800' }}>v6</div>
           </div>
         </div>
         <div style={{ marginTop: '10px', display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '13px', opacity: .8 }}>
@@ -318,16 +372,11 @@ export default function Home() {
         <div>
           <div style={{ ...S.card, padding: '14px 16px' }}>
 
-            {/* 검색 버튼 + 정렬 + 프로필 */}
-            <div style={{ ...S.row, marginBottom: '12px' }}>
+            {/* 검색 버튼 + 프로필 */}
+            <div style={{ ...S.row, marginBottom: '10px' }}>
               <button onClick={fetchContests} disabled={loading} style={S.btn(loading ? '#9ca3af' : '#1d4ed8')}>
                 {loading ? '⏳ 검색 중...' : '🔍 공모전 자동 검색'}
               </button>
-              <select value={sort} onChange={e => setSort(e.target.value)}
-                style={{ border: '1px solid #d1d5db', borderRadius: '8px', padding: '8px 10px', fontSize: '14px', background: '#fff' }}>
-                <option value="deadline">⏰ 마감 임박순</option>
-                <option value="prize">💰 상금 높은순</option>
-              </select>
               <div style={{ marginLeft: 'auto', fontSize: '13px', color: '#6b7280', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 프로필:
                 <select value={activeProfile} onChange={e => setActiveProfile(Number(e.target.value))}
@@ -336,6 +385,30 @@ export default function Home() {
                 </select>
               </div>
             </div>
+
+            {/* 보기 모드: 마감임박순 / 진행중 / 상금높은순 (가로 스크롤) */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '2px' }}>
+              {[
+                ['urgent',  '⏰ 마감임박순'],
+                ['ongoing', '🟢 진행중'],
+                ['prize',   '💰 상금높은순'],
+              ].map(([k, l]) => (
+                <button key={k} onClick={() => setViewMode(k)}
+                  style={{ ...S.filterBtn(viewMode === k), whiteSpace: 'nowrap', flexShrink: 0, padding: '7px 16px' }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            {viewMode === 'urgent' && (
+              <div style={{ fontSize: '12px', color: '#d97706', marginBottom: '8px' }}>
+                ⏰ 검색 시점 기준 마감까지 7일 이내인 공모전만 보여줘요.
+              </div>
+            )}
+            {viewMode === 'ongoing' && (
+              <div style={{ fontSize: '12px', color: '#059669', marginBottom: '8px' }}>
+                🟢 마감까지 8일 이상 남았거나 마감일이 정해지지 않은 공모전을 보여줘요.
+              </div>
+            )}
 
             {/* 키워드 검색 */}
             <input placeholder="🔎 키워드 검색 (공모전명·주최·지역)" value={keyword} onChange={e => setKeyword(e.target.value)}
@@ -631,7 +704,7 @@ export default function Home() {
                   STEP 2에 응모글을 붙여넣고 💾 저장하면 여기에 기록돼요
                 </div>
               )}
-              {history.map(h => {
+              {sortedHistory.map(h => {
                 const daysLeft = daysUntil(h.resultDate);
                 return (
                   <div key={h.id} style={S.card}>
@@ -648,18 +721,17 @@ export default function Home() {
                       {h.profile    && <span style={S.badge('#7c3aed')}>{h.profile}</span>}
                       {h.category   && <span style={S.badge(catColor[h.category] || '#6b7280')}>{h.category}</span>}
                       <span style={{ color: '#9ca3af', fontSize: '12px' }}>응모일: {h.date}</span>
+                      {h.resultDate && (
+                        <span style={{ color: '#ef4444', fontSize: '16px', fontWeight: '800', marginLeft: '4px' }}>
+                          📅 결과발표: {h.resultDate}
+                          {daysLeft !== null && (
+                            <span style={{ fontSize: '13px', marginLeft: '6px' }}>
+                              ({daysLeft > 0 ? `D-${daysLeft}` : daysLeft === 0 ? 'D-DAY' : '발표됨'})
+                            </span>
+                          )}
+                        </span>
+                      )}
                     </div>
-
-                    {h.resultDate && (
-                      <div style={{ background: daysLeft !== null && daysLeft <= 3 ? '#fff7ed' : '#f0fdf4', border: `1px solid ${daysLeft !== null && daysLeft <= 3 ? '#fed7aa' : '#bbf7d0'}`, borderRadius: '8px', padding: '8px 12px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '13px' }}>📅 결과 발표: <strong>{h.resultDate}</strong></span>
-                        {daysLeft !== null && (
-                          <strong style={{ fontSize: '14px', color: daysLeft <= 0 ? '#ef4444' : daysLeft <= 3 ? '#d97706' : '#059669' }}>
-                            {daysLeft <= 0 ? '발표됨!' : `D-${daysLeft}`}
-                          </strong>
-                        )}
-                      </div>
-                    )}
 
                     {h.siteUrl && (
                       <div style={{ marginBottom: '8px', fontSize: '13px' }}>
