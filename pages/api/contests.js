@@ -1,27 +1,13 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
-// ── 이미지 URL 보정 (상대경로 → 절대경로, 프로토콜 보정) ──────────────
-function resolveImg(src, baseUrl) {
-  if (!src) return '';
-  src = src.trim();
-  if (!src || src.startsWith('data:')) return '';
-  if (src.startsWith('//')) return 'https:' + src;
-  if (src.startsWith('http')) return src;
-  try { return new URL(src, baseUrl).href; } catch { return ''; }
+// ── href를 절대 URL로 안전하게 변환 (슬래시 누락 등 깨진 경로 방지) ────
+function safeUrl(href, base) {
+  if (!href) return '';
+  try { return new URL(href, base).href; } catch { return ''; }
 }
 
-// 주어진 요소(또는 영역) 안에서 첫 번째 <img>의 src를 추출
-function findImage(scope, baseUrl) {
-  if (!scope || !scope.length) return '';
-  const img = scope.find('img').first();
-  if (!img.length) return '';
-  const src = img.attr('src') || img.attr('data-src') || img.attr('data-original')
-            || img.attr('data-lazy-src') || img.attr('data-lazy') || '';
-  return resolveImg(src, baseUrl);
-}
-
-
+// ── 제목에서 카테고리 추정 ──────────────────────────────────────────
 function guessCategory(title, extra = '') {
   const bracketLabels = [...title.matchAll(/\[([^\]]+)\]/g)].map(m => m[1]).join(' ');
   const text = `${title} ${extra} ${bracketLabels}`;
@@ -89,10 +75,9 @@ export default async function handler(req, res) {
             const deadline = $(el).find('.date, .dday, .d-day, .period').first().text().trim();
             const prize    = $(el).find('.prize, .reward, .money').first().text().trim();
             const href     = $(el).find('a').first().attr('href');
-            const detailUrl = href ? (href.startsWith('http') ? href : 'https://www.wevity.com' + href) : '';
-            const image    = findImage($(el), 'https://www.wevity.com');
+            const detailUrl = safeUrl(href, 'https://www.wevity.com/');
             if (title && title.length > 4) {
-              contests.push({ title, host, deadline, prize, source: '위비티', detailUrl, image,
+              contests.push({ title, host, deadline, prize, source: '위비티', detailUrl,
                 region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
             }
           });
@@ -106,10 +91,8 @@ export default async function handler(req, res) {
             const href  = $(el).attr('href');
             if (title.length > 4 && title.length < 100 && !seen.has(title)) {
               seen.add(title);
-              const detailUrl = href ? (href.startsWith('http') ? href : 'https://www.wevity.com' + href) : '';
-              const container = $(el).closest('li, dl, div, article');
-              const image = findImage(container.length ? container : $(el), 'https://www.wevity.com');
-              contests.push({ title, host: '', deadline: '', prize: '', source: '위비티', detailUrl, image,
+              const detailUrl = safeUrl(href, 'https://www.wevity.com/');
+              contests.push({ title, host: '', deadline: '', prize: '', source: '위비티', detailUrl,
                 region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
             }
           });
@@ -127,16 +110,13 @@ export default async function handler(req, res) {
           );
           const $r = cheerio.load(rssData, { xmlMode: true });
           $r('item').each((_, el) => {
-            const title    = $r(el).find('title').text().trim();
-            const link     = $r(el).find('link').text().trim();
-            const descHtml = $r(el).find('description').html() || '';
-            const desc     = descHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            const title = $r(el).find('title').text().trim();
+            const link  = $r(el).find('link').text().trim();
+            const desc  = $r(el).find('description').text().trim();
             const hostMatch = desc.match(/주최[^：:]*[：:]\s*([^|<\n]+)/);
             const dateMatch = desc.match(/마감[^：:]*[：:]\s*([^|<\n]+)/);
             const catMatch  = title.match(/^\s*\[([^\]]+)\]/) || desc.match(/\[([^\]]+)\]/);
             const catHint   = catMatch ? catMatch[1] : '';
-            const imgMatch  = descHtml.match(/<img[^>]+src=["']([^"']+)["']/i);
-            const image     = imgMatch ? resolveImg(imgMatch[1], 'https://www.contestkorea.com') : '';
             if (title && title.length > 4) {
               contests.push({
                 title,
@@ -145,7 +125,6 @@ export default async function handler(req, res) {
                 prize:     '',
                 source:    '콘테스트코리아',
                 detailUrl: link || '',
-                image,
                 region:    guessRegion(title),
                 category:  guessCategory(title, catHint),
                 ageTarget: guessAge(title),
@@ -170,12 +149,24 @@ export default async function handler(req, res) {
             const href = $n(el).attr('href');
             if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title)) {
               seenNaming.add(title);
-              const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
-              const container = $n(el).closest('li, dl, div, tr');
-              const image = findImage(container.length ? container : $n(el), 'https://www.contestkorea.com');
+              const detailUrl = safeUrl(href, 'https://www.contestkorea.com/sub/list.php?int_gbn=1&Txt_bcode=030210001');
+
+              // 같은 행(row)에서 D-day 또는 접수기간 정보 추출
+              let deadline = '';
+              const $row = $n(el).closest('tr, li, .item, .list-item');
+              if ($row.length) {
+                const rowText = $row.text().replace(/\s+/g, ' ');
+                const ddayMatch = rowText.match(/D-\d+|D-DAY|마감임박|마감/i);
+                if (ddayMatch) deadline = ddayMatch[0].toUpperCase();
+                if (!deadline) {
+                  const dateMatch = rowText.match(/\d{4}[.\-]\d{1,2}[.\-]\d{1,2}\s*~\s*\d{4}[.\-]\d{1,2}[.\-]\d{1,2}/);
+                  if (dateMatch) deadline = dateMatch[0];
+                }
+              }
+
               contests.push({
-                title, host: '', deadline: '', prize: '',
-                source: '콘테스트코리아', detailUrl, image,
+                title, host: '', deadline, prize: '',
+                source: '콘테스트코리아', detailUrl,
                 region:    guessRegion(title),
                 category:  '슬로건',
                 ageTarget: guessAge(title),
@@ -197,10 +188,8 @@ export default async function handler(req, res) {
             const href  = $(el).attr('href');
             if (title.length > 5 && title.length < 100 && !seen.has(title)) {
               seen.add(title);
-              const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
-              const container = $(el).closest('li, dl, div, tr');
-              const image = findImage(container.length ? container : $(el), 'https://www.contestkorea.com');
-              contests.push({ title, host: '', deadline: '', prize: '', source: '콘테스트코리아', detailUrl, image,
+              const detailUrl = safeUrl(href, 'https://www.contestkorea.com/sub/list.php?int_gbn=1');
+              contests.push({ title, host: '', deadline: '', prize: '', source: '콘테스트코리아', detailUrl,
                 region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
             }
           });
@@ -232,7 +221,7 @@ export default async function handler(req, res) {
                 const host     = $(el).find('.organ, .host, .name, .company').first().text().trim();
                 const deadline = $(el).find('.date, .dday, .period').first().text().trim();
                 const href     = $(el).find('a').first().attr('href');
-                const detailUrl = href ? (href.startsWith('http') ? href : 'https://www.thinkcontest.com' + href) : '';
+                const detailUrl = safeUrl(href, url);
                 if (title && title.length > 4 && !seen.has(title)) {
                   seen.add(title);
                   contests.push({ title, host, deadline, prize: '', source: '씽굿', detailUrl,
@@ -248,7 +237,7 @@ export default async function handler(req, res) {
                 const href  = $(el).attr('href');
                 if (title.length > 5 && title.length < 100 && !seen.has(title)) {
                   seen.add(title);
-                  const detailUrl = href?.startsWith('http') ? href : 'https://www.thinkcontest.com' + href;
+                  const detailUrl = safeUrl(href, url);
                   contests.push({ title, host: '', deadline: '', prize: '', source: '씽굿', detailUrl,
                     region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
                 }
@@ -268,7 +257,7 @@ export default async function handler(req, res) {
           const href  = $(el).attr('href');
           if (title.length > 8 && title.length < 80 && href && !seen.has(title)) {
             seen.add(title);
-            const detailUrl = href.startsWith('http') ? href : new URL(href, site.url).href;
+            const detailUrl = safeUrl(href, site.url);
             contests.push({ title, host: '', deadline: '', prize: '', source: site.name, detailUrl,
               region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
           }
