@@ -1,7 +1,27 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
-// ── 제목에서 카테고리 추정 ──────────────────────────────────────────
+// ── 이미지 URL 보정 (상대경로 → 절대경로, 프로토콜 보정) ──────────────
+function resolveImg(src, baseUrl) {
+  if (!src) return '';
+  src = src.trim();
+  if (!src || src.startsWith('data:')) return '';
+  if (src.startsWith('//')) return 'https:' + src;
+  if (src.startsWith('http')) return src;
+  try { return new URL(src, baseUrl).href; } catch { return ''; }
+}
+
+// 주어진 요소(또는 영역) 안에서 첫 번째 <img>의 src를 추출
+function findImage(scope, baseUrl) {
+  if (!scope || !scope.length) return '';
+  const img = scope.find('img').first();
+  if (!img.length) return '';
+  const src = img.attr('src') || img.attr('data-src') || img.attr('data-original')
+            || img.attr('data-lazy-src') || img.attr('data-lazy') || '';
+  return resolveImg(src, baseUrl);
+}
+
+
 function guessCategory(title, extra = '') {
   const bracketLabels = [...title.matchAll(/\[([^\]]+)\]/g)].map(m => m[1]).join(' ');
   const text = `${title} ${extra} ${bracketLabels}`;
@@ -70,8 +90,9 @@ export default async function handler(req, res) {
             const prize    = $(el).find('.prize, .reward, .money').first().text().trim();
             const href     = $(el).find('a').first().attr('href');
             const detailUrl = href ? (href.startsWith('http') ? href : 'https://www.wevity.com' + href) : '';
+            const image    = findImage($(el), 'https://www.wevity.com');
             if (title && title.length > 4) {
-              contests.push({ title, host, deadline, prize, source: '위비티', detailUrl,
+              contests.push({ title, host, deadline, prize, source: '위비티', detailUrl, image,
                 region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
             }
           });
@@ -86,7 +107,9 @@ export default async function handler(req, res) {
             if (title.length > 4 && title.length < 100 && !seen.has(title)) {
               seen.add(title);
               const detailUrl = href ? (href.startsWith('http') ? href : 'https://www.wevity.com' + href) : '';
-              contests.push({ title, host: '', deadline: '', prize: '', source: '위비티', detailUrl,
+              const container = $(el).closest('li, dl, div, article');
+              const image = findImage(container.length ? container : $(el), 'https://www.wevity.com');
+              contests.push({ title, host: '', deadline: '', prize: '', source: '위비티', detailUrl, image,
                 region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
             }
           });
@@ -104,13 +127,16 @@ export default async function handler(req, res) {
           );
           const $r = cheerio.load(rssData, { xmlMode: true });
           $r('item').each((_, el) => {
-            const title = $r(el).find('title').text().trim();
-            const link  = $r(el).find('link').text().trim();
-            const desc  = $r(el).find('description').text().trim();
+            const title    = $r(el).find('title').text().trim();
+            const link     = $r(el).find('link').text().trim();
+            const descHtml = $r(el).find('description').html() || '';
+            const desc     = descHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
             const hostMatch = desc.match(/주최[^：:]*[：:]\s*([^|<\n]+)/);
             const dateMatch = desc.match(/마감[^：:]*[：:]\s*([^|<\n]+)/);
             const catMatch  = title.match(/^\s*\[([^\]]+)\]/) || desc.match(/\[([^\]]+)\]/);
             const catHint   = catMatch ? catMatch[1] : '';
+            const imgMatch  = descHtml.match(/<img[^>]+src=["']([^"']+)["']/i);
+            const image     = imgMatch ? resolveImg(imgMatch[1], 'https://www.contestkorea.com') : '';
             if (title && title.length > 4) {
               contests.push({
                 title,
@@ -119,6 +145,7 @@ export default async function handler(req, res) {
                 prize:     '',
                 source:    '콘테스트코리아',
                 detailUrl: link || '',
+                image,
                 region:    guessRegion(title),
                 category:  guessCategory(title, catHint),
                 ageTarget: guessAge(title),
@@ -144,9 +171,11 @@ export default async function handler(req, res) {
             if (title.length > 5 && title.length < 100 && !seenNaming.has(title) && !existingTitles.has(title)) {
               seenNaming.add(title);
               const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
+              const container = $n(el).closest('li, dl, div, tr');
+              const image = findImage(container.length ? container : $n(el), 'https://www.contestkorea.com');
               contests.push({
                 title, host: '', deadline: '', prize: '',
-                source: '콘테스트코리아', detailUrl,
+                source: '콘테스트코리아', detailUrl, image,
                 region:    guessRegion(title),
                 category:  '슬로건',
                 ageTarget: guessAge(title),
@@ -169,7 +198,9 @@ export default async function handler(req, res) {
             if (title.length > 5 && title.length < 100 && !seen.has(title)) {
               seen.add(title);
               const detailUrl = href?.startsWith('http') ? href : 'https://www.contestkorea.com' + href;
-              contests.push({ title, host: '', deadline: '', prize: '', source: '콘테스트코리아', detailUrl,
+              const container = $(el).closest('li, dl, div, tr');
+              const image = findImage(container.length ? container : $(el), 'https://www.contestkorea.com');
+              contests.push({ title, host: '', deadline: '', prize: '', source: '콘테스트코리아', detailUrl, image,
                 region: guessRegion(title), category: guessCategory(title), ageTarget: guessAge(title) });
             }
           });
