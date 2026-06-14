@@ -17,8 +17,36 @@ export default async function handler(req, res) {
     });
 
     const $ = cheerio.load(data);
-    $('script, style, nav, footer, header, .ad, .banner, .sns, .share, .gnb, .lnb').remove();
-    const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+
+    // ── 광고/메뉴/스크립트 등 노이즈 제거 (Cheerio 전처리) ───────────────
+    $(
+      'script, style, noscript, iframe, form, ' +
+      'nav, footer, header, aside, ' +
+      '.ad, .ads, .adv, .advertise, .banner, .banner_area, ' +
+      '.sns, .share, .sharing, ' +
+      '.gnb, .lnb, .menu, .nav, .navbar, .breadcrumb, ' +
+      '.popup, .modal, .layer, ' +
+      '.comment, .comments, .reply, ' +
+      '.related, .recommend, .ranking, .sidebar'
+    ).remove();
+
+    // ── 본문으로 추정되는 영역을 우선 사용 (없으면 body 전체) ───────────
+    const contentSelectors = [
+      '.view_cont', '.view-cont', '.board_view', '.board-view',
+      '.detail_cont', '.detail-cont', '.content_view', '.content-view',
+      '.view_area', '.view-area', '.cont_view',
+      'article', '#content', '.content', '.view-content', 'main',
+    ];
+    let $content = null;
+    for (const sel of contentSelectors) {
+      const $el = $(sel).first();
+      if ($el.length && $el.text().replace(/\s+/g, ' ').trim().length > 100) {
+        $content = $el;
+        break;
+      }
+    }
+
+    const bodyText = ($content || $('body')).text().replace(/\s+/g, ' ').trim();
     const pageText = bodyText.slice(0, 3000);
 
     const charLimitMatch = pageText.match(/([0-9,]+)\s*자\s*(이내|이하|미만|내외)/);
